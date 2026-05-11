@@ -1,145 +1,37 @@
 // ============================================================
-// CONFIG — update this to match your running server
+// GUARD — redirect to login if not authenticated
 // ============================================================
-const API_BASE = 'http://localhost:3000/api';
+requireAuth();
 
 // ============================================================
-// STATE — all stored in memory (cleared on page refresh)
+// STATE
 // ============================================================
-let token        = null;
-let currentUser  = null;
+const user       = getUser();
+const token      = getToken();
 let currentPage  = 1;
 let totalPages   = 1;
 let searchTimer  = null;
-let currentTab   = 'public'; // 'public' | 'mine'
-let likedPosts   = new Set(); // tracks likes for this session
-let currentModalPostId = null;
-let currentModalLiked  = false;
+let currentTab   = 'public';
+let likedPosts   = new Set();
+let activePostId = null;
+let activePostLiked = false;
 
 // ============================================================
-// AUTH STATE — update the whole UI based on login status
+// BOOT — populate nav with user info
 // ============================================================
-function updateAuthUI() {
-  const loggedIn = !!token;
-
-  // Nav: swap logged-out links for logged-in state
-  document.getElementById('nav-auth-links').style.display = loggedIn ? 'none' : 'flex';
-  const navUser = document.getElementById('nav-user');
-  navUser.style.display = loggedIn ? 'flex' : 'none';
-  if (loggedIn) {
-    document.getElementById('nav-username-display').textContent = `@${currentUser.username}`;
-  }
-
-  // Floating create button
-  const fab = document.getElementById('create-btn');
-  fab.classList.toggle('visible', loggedIn);
-
-  // Feed tabs — "My posts" only shown when logged in
-  const tabPublic = document.getElementById('tab-public');
-  const tabMine   = document.getElementById('tab-mine');
-  tabPublic.style.display = 'inline-block';
-  tabMine.style.display   = loggedIn ? 'inline-block' : 'none';
-}
+(function bootNav() {
+  document.getElementById('nav-avatar').textContent =
+    getInitials(user, user);
+  document.getElementById('nav-username').textContent =
+    `@${user.username}`;
+})();
 
 // ============================================================
 // LOGOUT
 // ============================================================
 function handleLogout() {
-  token       = null;
-  currentUser = null;
-  likedPosts.clear();
-  switchTab('public');
-  updateAuthUI();
-  showToast('Signed out.');
-}
-
-// ============================================================
-// REGISTER
-// ============================================================
-async function handleRegister() {
-  const result     = document.getElementById('reg-result');
-  const usernameErr = document.getElementById('reg-username-err');
-  usernameErr.textContent = '';
-  result.className = 'auth-result';
-
-  const username = document.getElementById('reg-username').value.trim();
-  if (username.length < 4) {
-    usernameErr.textContent = 'Username must be at least 4 characters.';
-    return;
-  }
-
-  const body = {
-    first_name: document.getElementById('reg-first').value.trim(),
-    last_name:  document.getElementById('reg-last').value.trim(),
-    username,
-    email:    document.getElementById('reg-email').value.trim(),
-    password: document.getElementById('reg-password').value,
-  };
-
-  try {
-    const res  = await fetch(`${API_BASE}/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json();
-
-    if (json.success) {
-      // Auto-login after register — no need to sign in again
-      token       = json.data.token;
-      currentUser = json.data.user;
-      updateAuthUI();
-      result.className = 'auth-result success';
-      result.textContent = `✓ Account created! Welcome, ${json.data.user.first_name}.`;
-      showToast(`Welcome to Nexly, ${json.data.user.first_name}!`);
-      fetchPosts();
-    } else {
-      result.className = 'auth-result error';
-      result.textContent = `✗ ${json.message}`;
-    }
-  } catch {
-    result.className = 'auth-result error';
-    result.textContent = '✗ Could not reach the API. Is the server running?';
-  }
-}
-
-// ============================================================
-// LOGIN
-// ============================================================
-async function handleLogin() {
-  const result = document.getElementById('login-result');
-  result.className = 'auth-result';
-
-  const body = {
-    email:    document.getElementById('login-email').value.trim(),
-    password: document.getElementById('login-password').value,
-  };
-
-  try {
-    const res  = await fetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json();
-
-    if (json.success) {
-      token       = json.data.token;
-      currentUser = json.data.user;
-      updateAuthUI();
-      result.className = 'auth-result success';
-      result.textContent = `✓ Signed in as @${json.data.user.username}`;
-      showToast(`Welcome back, ${json.data.user.first_name}!`);
-      // Scroll up to feed
-      document.getElementById('feed').scrollIntoView({ behavior: 'smooth' });
-    } else {
-      result.className = 'auth-result error';
-      result.textContent = `✗ ${json.message}`;
-    }
-  } catch {
-    result.className = 'auth-result error';
-    result.textContent = '✗ Could not reach the API. Is the server running?';
-  }
+  clearAuth();
+  window.location.href = '/login.html';
 }
 
 // ============================================================
@@ -151,8 +43,9 @@ function switchTab(tab) {
 
   document.getElementById('tab-public').classList.toggle('active', tab === 'public');
   document.getElementById('tab-mine').classList.toggle('active', tab === 'mine');
+  document.getElementById('feed-title').textContent = tab === 'public' ? 'Public feed' : 'My posts';
 
-  // Hide the author filter on "My posts" — it doesn't apply there
+  // Author filter only makes sense on public feed
   document.getElementById('authorInput').style.display = (tab === 'mine') ? 'none' : '';
 
   fetchPosts();
@@ -178,14 +71,13 @@ async function fetchPosts() {
     ? `${API_BASE}/posts/me`
     : `${API_BASE}/posts`;
 
-  const grid = document.getElementById('postsGrid');
-  grid.innerHTML = skeletonHTML();
-
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const container = document.getElementById('postsContainer');
+  container.innerHTML = skeletonHTML();
 
   try {
-    const res  = await fetch(`${endpoint}?${params}`, { headers });
+    const res  = await fetch(`${endpoint}?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
     const json = await res.json();
     if (!json.success) throw new Error(json.message);
 
@@ -193,7 +85,7 @@ async function fetchPosts() {
     const pg    = json.pagination;
     totalPages  = pg?.total_pages || 1;
 
-    // Update pagination
+    // Pagination
     const paginationEl = document.getElementById('pagination');
     if (pg && pg.total > 0) {
       paginationEl.style.display = 'flex';
@@ -206,51 +98,40 @@ async function fetchPosts() {
     }
 
     if (posts.length === 0) {
-      const emptyMsg = (currentTab === 'mine')
-        ? 'No posts yet. Hit the + button to write your first one.'
-        : 'No posts found. Try a different search or be the first to write something.';
-      grid.innerHTML = `
-        <div class="feed-empty">
-          <div class="feed-empty-icon">✦</div>
-          <div>${emptyMsg}</div>
-        </div>`;
+      container.innerHTML = emptyHTML(currentTab);
       return;
     }
 
-    grid.innerHTML = posts.map(post => renderPostCard(post)).join('');
+    container.innerHTML = `<div class="posts-list">${posts.map(renderCard).join('')}</div>`;
 
   } catch (err) {
-    grid.innerHTML = `
+    container.innerHTML = `
       <div class="feed-empty">
         <div class="feed-empty-icon">⚠</div>
         <div style="color:var(--red)">Could not connect to the API.<br>
-          <span style="color:var(--muted);font-size:12px">Make sure the server is running at ${API_BASE}</span>
+          <span style="color:var(--muted);font-size:12px">${err.message || 'Check that your server is running.'}</span>
         </div>
       </div>`;
   }
 }
 
-// Renders a single post card as HTML string
-function renderPostCard(post) {
-  const isDraft = post.state === 'draft';
-  const liked   = likedPosts.has(post._id);
+// ============================================================
+// RENDER POST CARD
+// ============================================================
+function renderCard(post) {
+  const isDraft  = post.state === 'draft';
+  const liked    = likedPosts.has(post._id);
+  const isOwner  = currentTab === 'mine' ||
+    (post.author?._id === user._id || post.author === user._id);
 
-  // Author might not be populated on /posts/me — fallback to currentUser
-  const authorName = post.author?.username || currentUser?.username || 'unknown';
-  const avatarStr  = getInitials(post.author);
-
-  // Show publish/delete actions for own posts
-  const isOwner = currentUser && (
-    post.author?._id === currentUser._id ||
-    post.author === currentUser._id ||
-    currentTab === 'mine'
-  );
+  const authorName = post.author?.username || user.username;
+  const avatarStr  = getInitials(post.author, user);
 
   return `
     <div class="post-card" onclick="openPost('${post._id}')">
       <div>
         <div class="post-meta">
-          <div class="post-avatar">${avatarStr}</div>
+          <div class="post-avatar">${escHtml(avatarStr)}</div>
           <span class="post-author">${escHtml(authorName)}</span>
           ${isDraft ? '<span class="draft-badge">Draft</span>' : ''}
           <span class="post-dot">·</span>
@@ -262,17 +143,19 @@ function renderPostCard(post) {
           ? `<div class="post-tags">${post.tags.map(t => `<span class="tag">#${escHtml(t)}</span>`).join('')}</div>`
           : ''}
       </div>
-      <div class="post-stats">
+      <div class="post-actions">
         <button
           class="like-btn ${liked ? 'liked' : ''}"
           data-post-id="${post._id}"
           data-liked="${liked}"
           onclick="toggleLike(this, event)"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="${liked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
+          <svg width="14" height="14" viewBox="0 0 24 24"
+            fill="${liked ? 'currentColor' : 'none'}"
+            stroke="currentColor" stroke-width="2">
             <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
           </svg>
-          <span id="like-count-${post._id}">${post.like_count}</span>
+          <span id="lc-${post._id}">${post.like_count}</span>
         </button>
         ${isOwner && isDraft ? `
           <button class="action-btn publish-btn" onclick="publishPost('${post._id}', event)">
@@ -282,7 +165,7 @@ function renderPostCard(post) {
             Publish
           </button>` : ''}
         ${isOwner ? `
-          <button class="action-btn delete-btn" onclick="deletePost('${post._id}', event)" title="Delete post">
+          <button class="action-btn delete-btn" onclick="deletePost('${post._id}', event)" title="Delete">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
             </svg>
@@ -292,47 +175,35 @@ function renderPostCard(post) {
 }
 
 // ============================================================
-// LIKE / UNLIKE (from feed)
+// LIKE / UNLIKE (feed)
 // ============================================================
 async function toggleLike(btn, event) {
   event.stopPropagation();
-
-  if (!token) {
-    showToast('Sign in to like posts');
-    return;
-  }
-
   const postId  = btn.dataset.postId;
   const isLiked = btn.dataset.liked === 'true';
-  const method  = isLiked ? 'DELETE' : 'POST';
 
   try {
     const res  = await fetch(`${API_BASE}/posts/${postId}/like`, {
-      method,
+      method: isLiked ? 'DELETE' : 'POST',
       headers: { 'Authorization': `Bearer ${token}` },
     });
     const json = await res.json();
-    if (!json.success) { showToast(json.message); return; }
+    if (!json.success) { showToast(json.message, 'error'); return; }
 
-    // Update local set
-    if (isLiked) likedPosts.delete(postId);
-    else         likedPosts.add(postId);
-
-    // Toggle button visually
     const newLiked = !isLiked;
+    if (newLiked) likedPosts.add(postId);
+    else          likedPosts.delete(postId);
+
     btn.dataset.liked = String(newLiked);
     btn.classList.toggle('liked', newLiked);
-    const svgPath = btn.querySelector('path');
-    if (svgPath) svgPath.setAttribute('fill', newLiked ? 'currentColor' : 'none');
+    btn.querySelector('path').setAttribute('fill', newLiked ? 'currentColor' : 'none');
 
-    // Update count
-    const countEl = document.getElementById(`like-count-${postId}`);
+    const countEl = document.getElementById(`lc-${postId}`);
     if (countEl) {
-      const current = parseInt(countEl.textContent) || 0;
-      countEl.textContent = newLiked ? current + 1 : current - 1;
+      countEl.textContent = parseInt(countEl.textContent) + (newLiked ? 1 : -1);
     }
   } catch {
-    showToast('Something went wrong.');
+    showToast('Something went wrong.', 'error');
   }
 }
 
@@ -341,22 +212,16 @@ async function toggleLike(btn, event) {
 // ============================================================
 async function publishPost(postId, event) {
   event.stopPropagation();
-  if (!token) return;
-
   try {
     const res  = await fetch(`${API_BASE}/posts/${postId}/publish`, {
       method: 'PATCH',
       headers: { 'Authorization': `Bearer ${token}` },
     });
     const json = await res.json();
-    if (json.success) {
-      showToast('Post published!');
-      fetchPosts();
-    } else {
-      showToast(json.message);
-    }
+    if (json.success) { showToast('Post published!'); fetchPosts(); }
+    else showToast(json.message, 'error');
   } catch {
-    showToast('Could not publish post.');
+    showToast('Could not publish post.', 'error');
   }
 }
 
@@ -365,23 +230,17 @@ async function publishPost(postId, event) {
 // ============================================================
 async function deletePost(postId, event) {
   event.stopPropagation();
-  if (!token) return;
   if (!confirm('Delete this post? This cannot be undone.')) return;
-
   try {
     const res  = await fetch(`${API_BASE}/posts/${postId}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` },
     });
     const json = await res.json();
-    if (json.success) {
-      showToast('Post deleted.');
-      fetchPosts();
-    } else {
-      showToast(json.message);
-    }
+    if (json.success) { showToast('Post deleted.'); fetchPosts(); }
+    else showToast(json.message, 'error');
   } catch {
-    showToast('Could not delete post.');
+    showToast('Could not delete post.', 'error');
   }
 }
 
@@ -389,98 +248,92 @@ async function deletePost(postId, event) {
 // READ POST MODAL
 // ============================================================
 async function openPost(id) {
-  currentModalPostId = id;
-  currentModalLiked  = likedPosts.has(id);
+  activePostId    = id;
+  activePostLiked = likedPosts.has(id);
 
-  document.getElementById('modalOverlay').classList.add('open');
-  document.getElementById('modal-title').textContent = 'Loading…';
-  document.getElementById('modal-content').textContent = '';
-  document.getElementById('modal-tags').innerHTML = '';
-
-  const headers = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  document.getElementById('readOverlay').classList.add('open');
+  document.getElementById('read-title').textContent   = 'Loading…';
+  document.getElementById('read-content').textContent = '';
+  document.getElementById('read-tags').innerHTML      = '';
 
   try {
-    const res  = await fetch(`${API_BASE}/posts/${id}`, { headers });
+    const res  = await fetch(`${API_BASE}/posts/${id}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
     const json = await res.json();
     if (!json.success) throw new Error(json.message);
 
     const p = json.data;
 
-    // If the response includes the full likes array, check it
-    if (token && currentUser && Array.isArray(p.likes)) {
-      currentModalLiked = p.likes.includes(currentUser._id);
-      if (currentModalLiked) likedPosts.add(id);
+    // Sync like state from server if likes array is returned
+    if (Array.isArray(p.likes)) {
+      activePostLiked = p.likes.includes(user._id);
+      if (activePostLiked) likedPosts.add(id);
+      else likedPosts.delete(id);
     }
 
-    document.getElementById('modal-meta').innerHTML = `
-      <div class="post-avatar">${getInitials(p.author)}</div>
-      <span class="post-author">${escHtml(p.author?.username || 'unknown')}</span>
+    document.getElementById('read-meta').innerHTML = `
+      <div class="post-avatar">${escHtml(getInitials(p.author, user))}</div>
+      <span class="post-author">${escHtml(p.author?.username || user.username)}</span>
       <span class="post-dot">·</span>
       <span class="post-time">${timeAgo(p.createdAt)}</span>`;
 
-    document.getElementById('modal-title').textContent   = p.title;
-    document.getElementById('modal-content').textContent = p.content;
-    document.getElementById('modal-date').textContent    = new Date(p.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    document.getElementById('modal-likes').textContent   = `${p.like_count} like${p.like_count !== 1 ? 's' : ''}`;
-    document.getElementById('modal-tags').innerHTML      = (p.tags || []).map(t => `<span class="tag">#${escHtml(t)}</span>`).join('');
+    document.getElementById('read-title').textContent   = p.title;
+    document.getElementById('read-content').textContent = p.content;
+    document.getElementById('read-date').textContent    =
+      new Date(p.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    document.getElementById('read-likes').textContent   =
+      `${p.like_count} like${p.like_count !== 1 ? 's' : ''}`;
+    document.getElementById('read-tags').innerHTML      =
+      (p.tags || []).map(t => `<span class="tag">#${escHtml(t)}</span>`).join('');
 
-    const likeBtn = document.getElementById('modal-like-btn');
-    likeBtn.classList.toggle('liked', currentModalLiked);
-    const likeIcon = likeBtn.querySelector('path');
-    if (likeIcon) likeIcon.setAttribute('fill', currentModalLiked ? 'currentColor' : 'none');
+    const likeBtn  = document.getElementById('read-like-btn');
+    likeBtn.classList.toggle('liked', activePostLiked);
+    likeBtn.querySelector('path').setAttribute('fill', activePostLiked ? 'currentColor' : 'none');
 
   } catch {
-    document.getElementById('modal-title').textContent = 'Could not load post.';
+    document.getElementById('read-title').textContent = 'Could not load post.';
   }
 }
 
 async function toggleModalLike() {
-  if (!token) { showToast('Sign in to like posts'); return; }
-  if (!currentModalPostId) return;
-
-  const method = currentModalLiked ? 'DELETE' : 'POST';
+  if (!activePostId) return;
+  const method = activePostLiked ? 'DELETE' : 'POST';
   try {
-    const res  = await fetch(`${API_BASE}/posts/${currentModalPostId}/like`, {
+    const res  = await fetch(`${API_BASE}/posts/${activePostId}/like`, {
       method,
       headers: { 'Authorization': `Bearer ${token}` },
     });
     const json = await res.json();
-    if (!json.success) { showToast(json.message); return; }
+    if (!json.success) { showToast(json.message, 'error'); return; }
 
-    currentModalLiked = !currentModalLiked;
-    if (currentModalLiked) likedPosts.add(currentModalPostId);
-    else                   likedPosts.delete(currentModalPostId);
+    activePostLiked = !activePostLiked;
+    if (activePostLiked) likedPosts.add(activePostId);
+    else                 likedPosts.delete(activePostId);
 
-    const likeBtn = document.getElementById('modal-like-btn');
-    likeBtn.classList.toggle('liked', currentModalLiked);
-    const likeIcon = likeBtn.querySelector('path');
-    if (likeIcon) likeIcon.setAttribute('fill', currentModalLiked ? 'currentColor' : 'none');
+    const likeBtn = document.getElementById('read-like-btn');
+    likeBtn.classList.toggle('liked', activePostLiked);
+    likeBtn.querySelector('path').setAttribute('fill', activePostLiked ? 'currentColor' : 'none');
 
-    const current  = parseInt(document.getElementById('modal-likes').textContent) || 0;
-    const newCount = currentModalLiked ? current + 1 : current - 1;
-    document.getElementById('modal-likes').textContent = `${newCount} like${newCount !== 1 ? 's' : ''}`;
+    const currentCount = parseInt(document.getElementById('read-likes').textContent) || 0;
+    const newCount     = currentCount + (activePostLiked ? 1 : -1);
+    document.getElementById('read-likes').textContent = `${newCount} like${newCount !== 1 ? 's' : ''}`;
 
-  } catch {
-    showToast('Something went wrong.');
-  }
+  } catch { showToast('Something went wrong.', 'error'); }
 }
 
-function closeModal(e) { if (e.target === document.getElementById('modalOverlay')) closeModalDirect(); }
-function closeModalDirect() {
-  document.getElementById('modalOverlay').classList.remove('open');
-  currentModalPostId = null;
-}
+function closeReadModal(e) { if (e.target === document.getElementById('readOverlay')) closeReadDirect(); }
+function closeReadDirect()  { document.getElementById('readOverlay').classList.remove('open'); activePostId = null; }
 
 // ============================================================
 // CREATE POST MODAL
 // ============================================================
 function openCreateModal() {
-  document.getElementById('createOverlay').classList.add('open');
-  document.getElementById('post-title').value   = '';
-  document.getElementById('post-content').value = '';
-  document.getElementById('post-tags').value    = '';
+  document.getElementById('post-title').value         = '';
+  document.getElementById('post-content').value       = '';
+  document.getElementById('post-tags').value          = '';
   document.getElementById('create-error').textContent = '';
+  document.getElementById('createOverlay').classList.add('open');
 }
 function closeCreateModal(e) { if (e.target === document.getElementById('createOverlay')) closeCreateDirect(); }
 function closeCreateDirect() { document.getElementById('createOverlay').classList.remove('open'); }
@@ -495,12 +348,10 @@ async function submitPost(action) {
   if (!title)   { errEl.textContent = 'Title is required.';   return; }
   if (!content) { errEl.textContent = 'Content is required.'; return; }
 
-  const tags = tagsRaw
-    ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean)
-    : [];
+  const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
 
   try {
-    // Step 1: create as draft
+    // Create draft first
     const res  = await fetch(`${API_BASE}/posts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -509,7 +360,7 @@ async function submitPost(action) {
     const json = await res.json();
     if (!json.success) { errEl.textContent = json.message; return; }
 
-    // Step 2: publish if requested
+    // Publish if requested
     if (action === 'publish') {
       await fetch(`${API_BASE}/posts/${json.data._id}/publish`, {
         method: 'PATCH',
@@ -519,108 +370,74 @@ async function submitPost(action) {
 
     closeCreateDirect();
     showToast(action === 'publish' ? 'Post published!' : 'Draft saved!');
-
-    // Switch to My posts to show the new one
     switchTab('mine');
 
   } catch {
-    errEl.textContent = 'Could not reach the API.';
+    errEl.textContent = 'Could not reach the server.';
   }
 }
 
 // ============================================================
-// UTILS
+// PAGINATION
 // ============================================================
-function timeAgo(dateStr) {
-  const diff = (Date.now() - new Date(dateStr)) / 1000;
-  if (diff < 60)    return 'just now';
-  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function getInitials(author) {
-  if (!author || typeof author === 'string') {
-    // Not populated — use currentUser if available
-    if (currentUser) {
-      return ((currentUser.first_name?.[0] || '') + (currentUser.last_name?.[0] || '')).toUpperCase() || '?';
-    }
-    return '?';
-  }
-  return ((author.first_name?.[0] || '') + (author.last_name?.[0] || '')).toUpperCase()
-    || author.username?.[0]?.toUpperCase()
-    || '?';
-}
-
-function escHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  document.getElementById('toast-msg').textContent = msg;
-  t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 3000);
-}
-
 function changePage(dir) {
   currentPage = Math.max(1, Math.min(totalPages, currentPage + dir));
   fetchPosts();
 }
 
+// ============================================================
+// HELPERS
+// ============================================================
 function skeletonHTML() {
   return `
-    <div class="skeleton-card">
-      <div style="display:flex;gap:10px;align-items:center">
-        <div class="skeleton" style="width:28px;height:28px;border-radius:50%"></div>
-        <div class="skeleton" style="width:120px"></div>
+    <div class="posts-list">
+      <div class="skeleton-card">
+        <div style="display:flex;gap:10px;align-items:center">
+          <div class="skeleton" style="width:26px;height:26px;border-radius:50%"></div>
+          <div class="skeleton" style="width:110px"></div>
+        </div>
+        <div class="skeleton" style="width:58%;height:18px;margin-top:4px"></div>
+        <div class="skeleton" style="width:90%"></div>
+        <div class="skeleton" style="width:70%"></div>
       </div>
-      <div class="skeleton" style="width:60%;height:20px"></div>
-      <div class="skeleton" style="width:90%"></div>
-      <div class="skeleton" style="width:75%"></div>
-    </div>
-    <div class="skeleton-card">
-      <div style="display:flex;gap:10px;align-items:center">
-        <div class="skeleton" style="width:28px;height:28px;border-radius:50%"></div>
-        <div class="skeleton" style="width:100px"></div>
+      <div class="skeleton-card">
+        <div style="display:flex;gap:10px;align-items:center">
+          <div class="skeleton" style="width:26px;height:26px;border-radius:50%"></div>
+          <div class="skeleton" style="width:90px"></div>
+        </div>
+        <div class="skeleton" style="width:65%;height:18px;margin-top:4px"></div>
+        <div class="skeleton" style="width:95%"></div>
+        <div class="skeleton" style="width:60%"></div>
       </div>
-      <div class="skeleton" style="width:70%;height:20px"></div>
-      <div class="skeleton" style="width:95%"></div>
-      <div class="skeleton" style="width:65%"></div>
+    </div>`;
+}
+
+function emptyHTML(tab) {
+  const msg = tab === 'mine'
+    ? 'No posts yet. Hit the <strong>+</strong> button to write your first one.'
+    : 'No posts found. Try a different search.';
+  return `
+    <div class="feed-empty">
+      <div class="feed-empty-icon">✦</div>
+      <div>${msg}</div>
     </div>`;
 }
 
 // ============================================================
 // EVENT LISTENERS
 // ============================================================
-window.addEventListener('scroll', () => {
-  document.getElementById('nav').classList.toggle('scrolled', window.scrollY > 40);
-});
-
-const revealObserver = new IntersectionObserver((entries) => {
-  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
-}, { threshold: 0.1 });
-document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
-
 ['searchInput', 'authorInput'].forEach(id => {
   document.getElementById(id).addEventListener('input', () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => { currentPage = 1; fetchPosts(); }, 400);
+    searchTimer = setTimeout(() => { currentPage = 1; fetchPosts(); }, 380);
   });
 });
 document.getElementById('sortSelect').addEventListener('change', () => { currentPage = 1; fetchPosts(); });
-document.getElementById('login-password').addEventListener('keydown', e => { if (e.key === 'Enter') handleLogin(); });
-document.getElementById('reg-password').addEventListener('keydown',  e => { if (e.key === 'Enter') handleRegister(); });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeModalDirect(); closeCreateDirect(); }
+  if (e.key === 'Escape') { closeReadDirect(); closeCreateDirect(); }
 });
 
 // ============================================================
 // INIT
 // ============================================================
-updateAuthUI();
 fetchPosts();
