@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Profile — Nexly</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+
+  <!-- NAV -->
+  <nav class="app-nav">
+    <div class="container">
+      <div class="app-nav-inner">
+        <a href="/" class="app-logo">Nex<span>ly</span></a>
+        <div class="nav-tabs">
+          <a href="/" class="nav-tab">Feed</a>
+        </div>
+        <div class="nav-right" id="nav-authed" style="display:none">
+          <div class="nav-avatar" id="nav-avatar"></div>
+          <span class="nav-user-name" id="nav-username"></span>
+          <button class="nav-logout-btn" onclick="handleLogout()">Sign out</button>
+        </div>
+        <div class="guest-nav-right" id="nav-guest">
+          <a href="/login.html" class="nav-link-plain">Sign in</a>
+          <a href="/signup.html" class="nav-btn-join">Join free</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- PROFILE BODY -->
+  <div class="app-body">
+    <main class="app-main">
+
+      <!-- Profile card -->
+      <div class="profile-card" id="profile-card">
+        <div class="profile-avatar" id="profile-avatar">?</div>
+        <div class="profile-info">
+          <div class="profile-name" id="profile-name">Loading…</div>
+          <div class="profile-username" id="profile-username"></div>
+          <div class="profile-stats">
+            <span><strong id="profile-following">—</strong> Following</span>
+            <span><strong id="profile-followers">—</strong> Followers</span>
+          </div>
+        </div>
+        <!-- Follow button — only shown to logged-in users viewing someone else -->
+        <button class="btn btn-primary" id="follow-btn"
+          onclick="toggleFollow()" style="display:none">Follow</button>
+      </div>
+
+      <!-- This user's published posts -->
+      <div class="feed-header" style="margin-top:32px">
+        <div class="feed-title" id="posts-heading">Posts</div>
+      </div>
+      <div id="postsContainer"></div>
+
+    </main>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast">
+    <svg class="toast-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M20 6 9 17l-5-5"/>
+    </svg>
+    <span id="toast-msg"></span>
+  </div>
+
+  <script src="/js/config.js"></script>
+  <script src="/js/profile.js"></script>
+</body>
+</html>
